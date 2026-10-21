@@ -1,0 +1,166 @@
+study: acdc_annotation_convention_controls
+version: convention_v2
+status: controls_and_mechanism_test
+
+scientific_question: >-
+  Does the RV annotation convention become a patient-specific spatial property
+  of the trained model, or does it mainly induce a population-level calibration
+  shift in segmentation-derived RVEF?
+
+secondary_question: >-
+  Can validation-set measurement calibration match convention-specific retraining
+  with fewer labels and less compute?
+
+locked_confirmatory_dataset:
+  name: M&Ms-2
+  policy: do_not_access_enumerate_hash_or_evaluate
+
+paths:
+  acdc_dir: null
+  refined_dir: null
+  out_dir: null
+  runs_root: null
+
+terminology:
+  allowed:
+    - original reference
+    - refined reference
+    - annotation convention
+    - convention envelope
+    - reference-sensitive error
+    - robust error
+    - calibration shift
+  forbidden:
+    - true reference
+    - anatomically correct reference
+    - confidence interval for the two-reference range
+
+measurement:
+  volumes_and_rvef: native_grid
+  dice_and_spatial_alignment: processed_grid
+  statistical_unit: patient
+  checkpoints: fixed_end_of_schedule_only
+  forbidden_checkpoint_pattern: best_by_ef
+
+phase0:
+  tasks:
+    - status_correction
+    - legacy_recipe_diff
+    - original_pipeline_reproduction
+  reproduction_targets:
+    native_rvef_bias: -0.54
+    native_rvef_mae: 5.17
+    processed_rv_dice: 0.8939
+  tolerances:
+    bias_points: 0.75
+    mae_points: 0.50
+    dice: 0.01
+
+phase1_rng_control:
+  capture_restore:
+    - torch_cpu_rng
+    - all_cuda_rng_states
+  same_label_sham:
+    one_batch:
+      max_logit_difference: 1.0e-7
+      max_gradient_difference: 1.0e-7
+      max_parameter_difference: 1.0e-7
+    short_run_epochs: 5
+    required_prediction_identity: true
+
+phase2_clean_pair:
+  architecture: unet
+  seeds: [0, 1, 2]
+  arms:
+    - original_labels
+    - refined_labels
+  epochs: 100
+  paired_controls:
+    - identical_initial_state
+    - identical_patient_split
+    - identical_sample_order
+    - identical_augmentation
+    - synchronized_dropout_rng
+    - identical_optimizer_schedule
+
+phase3_spatial_transmission:
+  directional_reference_masks:
+    add: refined_and_not_original
+    remove: original_and_not_refined
+  directional_model_masks:
+    add: refined_model_and_not_original_model
+    remove: original_model_and_not_refined_model
+  primary_metrics:
+    - directional_dice
+    - directional_precision
+    - directional_recall
+    - change_mass_inside_reference_change
+    - change_enrichment
+    - basal_support_shift
+    - apical_support_shift
+    - edv_shift_alignment
+    - esv_shift_alignment
+  nulls:
+    patient_permutations: 5000
+    same_convention_cross_seed_pairs: true
+    independent_dropout_same_label_pair: conditional
+
+phase4_calibration:
+  fit_data: validation_patients_only
+  methods:
+    - none
+    - intercept
+    - affine
+    - convention_specific_retraining
+  endpoints:
+    - EDV
+    - ESV
+    - RVEF_direct
+    - RVEF_from_calibrated_volumes
+  label_budgets: [3, 5, 10, 15]
+
+phase5_monitor:
+  candidate_scores:
+    - synchronized_rvef_convention_disagreement
+    - support_boundary_disagreement
+    - rv_presence_slice_disagreement
+    - basal_soft_probability_difference
+    - calibration_residual
+  baselines:
+    - four_architecture_rvef_range
+    - entropy
+    - edv_esv_plausibility
+    - same_convention_seed_disagreement
+    - random
+  targets:
+    - reference_spread_gt_5
+    - reference_threshold_instability_40
+    - reference_threshold_instability_45
+    - failure_label_flip_5
+    - robust_failure_outside_envelope_gt_5
+
+decision_gates:
+  engineering_validity:
+    mandatory:
+      - reproduction_gate_passes
+      - same_label_sham_passes
+      - recipe_differences_explained
+  convention_transmission:
+    requires_positive_beyond_null_in_at_least_one:
+      - directional_spatial_alignment
+      - edv_esv_shift_alignment
+      - support_boundary_alignment
+  calibration_interpretation:
+    if_calibration_matches_retraining: dominant_effect_is_calibration_like
+    if_retraining_exceeds_calibration_and_spatial_gate_passes: patient_specific_learning_supported
+  deployment_monitor:
+    mandatory:
+      - discrimination_above_chance_with_patient_bootstrap_support
+      - risk_coverage_better_than_random
+      - better_than_same_convention_null
+      - survives_removal_of_global_calibration_shift
+  dual_head:
+    allowed_only_if:
+      - engineering_validity_passes
+      - convention_transmission_passes
+      - deployment_monitor_passes

@@ -1,0 +1,89 @@
+study: acdc_annotation_convention_monitor
+version: convention_v1
+status: development_on_acdc
+locked_confirmatory_dataset: not_accessed
+
+terminology:
+  reference_names:
+    - original reference
+    - refined reference
+  convention_range_name: convention envelope
+  forbidden_interpretations:
+    - do not claim either annotation convention is anatomically correct
+    - do not use endpoint-based checkpoint selection
+
+data:
+  acdc_root: null
+  refined_root: null
+  development_patients_for_model_evaluation: patient101-patient150
+  training_pool: patient001-patient100
+  split:
+    method: stratified_by_group
+    validation_fraction: 0.15
+    split_seed: 42
+
+step0_label_geometry_audit:
+  command: >-
+    python analysis/01_label_comparison/label_comparison.py --help
+  outputs:
+    - convention_label_geometry.csv
+    - convention_label_geometry_summary.json
+    - figure_reference_nesting.png
+    - figure_change_direction_by_phase.png
+  failure_condition:
+    - any LV membership change
+    - any myocardium membership change
+    - any non-RV label transition outside 0<->RV
+
+step1_paired_training:
+  command: >-
+    python analysis/03_synchronized_retraining/train_synchronized_pair.py --help
+  architecture: unet
+  paired_seeds: [0, 1, 2]
+  epochs: 100
+  optimizer: Adam
+  scheduler: CosineAnnealingLR
+  loss: DiceCELoss(to_onehot_y=True, softmax=True)
+  checkpoint: fixed end-of-schedule last.pt
+  deterministic_controls:
+    initial_state: same state loaded into original and refined arms per seed
+    sample_order: hash(seed, epoch)
+    augmentation: hash(seed, epoch, patient, phase, slice)
+
+step2_evaluation:
+  command: >-
+    python analysis/03_synchronized_retraining/voxel_reproduction.py --help
+  matrix:
+    - original trained vs original reference
+    - original trained vs refined reference
+    - refined trained vs original reference
+    - refined trained vs refined reference
+  volume_and_rvef_measurement: native-grid prediction masks and native-grid references
+  dice_measurement: processed-grid masks
+  primary_quantities:
+    reference_shift: refined reference RVEF - original reference RVEF
+    model_shift: refined-trained RVEF - original-trained RVEF
+    robust_error: distance from prediction to convention envelope
+
+step3_deployment_monitor:
+  primary_score: abs(refined-trained RVEF - original-trained RVEF)
+  offline_targets:
+    - reference spread > 5
+    - five-point failure-label flip between references
+    - threshold instability at RVEF 40 or 45
+    - robust failure outside convention envelope > 5
+  baselines:
+    - existing four-architecture RVEF range
+    - entropy
+    - EDV/ESV plausibility
+    - random ranking
+    - MC dropout only if paired outputs already exist
+
+go_criteria:
+  minimum_required: 2
+  criteria:
+    - model shift tracks reference shift consistently across seeds
+    - matched-reference evaluation is reproducibly better than crossed evaluation
+    - convention disagreement outperforms ordinary architecture disagreement
+    - convention disagreement improves risk-coverage for threshold instability
+    - clinically meaningful RVEF shifts occur with small Dice changes

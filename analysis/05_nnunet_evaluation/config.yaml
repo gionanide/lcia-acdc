@@ -1,0 +1,269 @@
+schema_version: 1
+protocol_name: c2_reliability_evaluation_v1_3
+status: public_scientific_configuration
+paths:
+  acdc_dir: null
+  refined_dir: null
+  mnms_dir: null
+  mnms_metadata: null
+  nnunet_root: null
+  qualification_dir: null
+  historical_checkpoint: null
+  out_dir: null
+
+scientific_question: >-
+  After development-only qualification for high segmentation overlap and
+  completed training, does the frozen C2 measurement instrument retain
+  clinically material and silent RVEF errors under original and refined ACDC
+  reference policies and on M&Ms without adaptation?
+
+instrument:
+  implementation: official nnU-Net v2.8.1
+  configuration: 2d
+  folds: [0, 1, 2, 3, 4]
+  checkpoint_rule: checkpoint_final
+  same_rule_for_every_fold: true
+  training: false
+  calibration: false
+  postprocessing: none
+  threshold_tuning: false
+  predictor:
+    tile_step_size: 0.5
+    use_gaussian: true
+    use_mirroring: true
+    perform_everything_on_device: true
+    num_processes_preprocessing: 2
+    num_processes_segmentation_export: 2
+    native_grid_export: true
+  fold_outputs:
+    save_native_segmentation: true
+    save_native_probabilities: true
+  ensemble:
+    implementation: nnunetv2.ensembling.ensemble.ensemble_folders
+    arithmetic: float32 voxelwise mean of five native-grid fold probabilities
+    segmentation: official label-manager probability-to-segmentation conversion
+    save_native_probabilities: true
+  labels:
+    background: 0
+    rv: 1
+    myocardium: 2
+    lv: 3
+
+historical_comparator:
+  name: historical_fixed_SHA256_identified_MONAI_UNet
+  checkpoint: last.pt
+  forbidden_checkpoint_patterns: [best_by_ef, best_by_ef_ema]
+  architecture: MONAI 2D UNet from model_zoo.py
+  preprocessing: dataset.py target-spacing, center crop/pad, and slice z-score
+  prediction_to_native: validated convention_utils.processed_prediction_to_native
+  checkpoint_selection_in_this_stage: false
+  postprocessing: none
+
+cohorts:
+  acdc:
+    patients: {start: 101, end: 150, expected_count: 50}
+    phases: [ED, ES]
+    references: [original, refined]
+    refined_gate:
+      exact_native_geometry_match: true
+      label_domain: [0, 1, 2, 3]
+      lv_must_be_unchanged: true
+      myocardium_must_be_unchanged: true
+      complete_two_phase_pair_required: true
+  mnms:
+    root_alias: OpenDataset
+    expected_labeled_patient_count: 320
+    phases: [ED, ES]
+    phase_source: metadata_csv_ED_and_ES_columns_only
+    infer_phase_from_volume_extrema: false
+    adaptation: false
+    remap_raw_to_instrument: {0: 0, 1: 3, 2: 2, 3: 1}
+    remap_instrument_to_raw: {0: 0, 1: 3, 2: 2, 3: 1}
+    validation_gate:
+      unique_metadata_code: true
+      finite_in_bounds_distinct_ED_ES: true
+      exact_image_label_shape_and_native_geometry: true
+      raw_label_domain: [0, 1, 2, 3]
+      scaled_label_canonicalization_absolute_tolerance: 0.000001
+      reject_values_outside_canonicalization_tolerance: true
+      direction_repair:
+        implementation: scipy.linalg.polar
+        only_if_SimpleITK_rejects_nonorthonormal_direction: true
+        voxel_array_resampling_or_interpolation: false
+        preserve_shape: true
+        preserve_spacing: true
+        preserve_handedness: true
+        preserve_axis_codes: true
+        preserve_volume_center_world_coordinate: true
+        maximum_corner_displacement_mm: 0.1
+        maximum_corner_displacement_fraction_of_minimum_spacing: 0.05
+        identical_image_label_corrected_affine: true
+        require_SimpleITK_read_after_repair: true
+        persisted_affine_contract: exact_IEEE754_float32_serialization_of_corrected_affine
+        maximum_float32_serialization_corner_displacement_mm: 0.001
+        action_on_violation: abort_all_MnMs_evaluation
+      all_three_foreground_classes_present_in_each_annotated_phase: true
+      exact_remap_roundtrip: true
+      extracted_native_geometry_preserved: true
+      synthetic_native_measurement_golden_test: true
+      action_on_any_failure: abort_all_MnMs_evaluation
+  forbidden:
+    - MnM2
+    - M&Ms-2
+    - mnms2
+
+segmentation_endpoints:
+  statistical_unit: patient
+  per_phase: [rv_dice, rv_nsd_2mm, rv_hd95_mm, rv_assd_mm]
+  patient_aggregates:
+    - mean_phase_rv_dice
+    - minimum_phase_rv_dice
+    - mean_phase_rv_nsd_2mm
+    - maximum_phase_rv_hd95_mm
+    - mean_phase_rv_assd_mm
+  safety_chambers: [myocardium, lv]
+  nsd_tolerance_mm: 2.0
+  monai_empty_handling: ignore_empty_true_and_explicit_presence_flags
+  summaries: [mean, median, iqr, percentile_5, worst_valid]
+
+measurement_endpoints:
+  grid: native
+  voxel_volume_ml: product_of_SimpleITK_native_spacing_mm_divided_by_1000
+  rv_label: 1
+  endpoints: [EDV_ml, ESV_ml, stroke_volume_ml, RVEF_points]
+  rvef_formula: 100_times_EDV_minus_ESV_divided_by_EDV
+  error_summaries:
+    - signed_bias
+    - mae
+    - median_absolute_error
+    - rmse
+    - error_sd_ddof1
+    - bland_altman_lower_1_96sd
+    - bland_altman_upper_1_96sd
+  rvef_error_thresholds_points: [5.0, 10.0]
+  category_thresholds_points: [40.0, 45.0]
+  category_definition: below_threshold_vs_greater_than_or_equal_to_threshold
+  equality_is_failure: false
+  ratio_handling:
+    clipping: false
+    catastrophic_denominator: predicted_EDV_nonfinite_or_less_than_or_equal_to_0_ml
+    near_zero_predicted_edv_ml_strictly_below: 1.0
+    nonfinite_measurement: any_predicted_EDV_ESV_or_RVEF_nonfinite
+    finite_pathological_rvef: predicted_RVEF_below_0_or_above_100
+    pathological_volume_order: predicted_ESV_greater_than_predicted_EDV
+    aggregation: preserve_all_rows_and_report_valid_denominator_explicitly
+
+reference_policy:
+  convention_envelope_term: convention envelope
+  never_call_envelope_confidence_interval: true
+  never_claim_either_reference_anatomically_correct: true
+  spread: absolute_refined_minus_original
+  robust_absolute_error: distance_from_prediction_to_closed_interval_between_references
+  robust_signed_error: prediction_minus_nearest_envelope_boundary_or_0_inside
+  report_failure_flips_at_points: [5.0, 10.0]
+  report_threshold_flips_at_points: [40.0, 45.0]
+
+silent_failure:
+  primary_high_overlap_gate: minimum_phase_rv_dice_greater_than_or_equal_to_0.90
+  sensitivity_high_overlap_gate: minimum_phase_rv_dice_greater_than_or_equal_to_0.95
+  ACDC_convention_envelope_overlap: >-
+    minimum across ED and ES and across both original and refined reference policies
+  events:
+    - absolute_RVEF_error_greater_than_5
+    - absolute_RVEF_error_greater_than_10
+    - category_disagreement_at_40
+    - category_disagreement_at_45
+    - ACDC_robust_RVEF_error_outside_envelope_greater_than_5
+    - ACDC_robust_RVEF_error_outside_envelope_greater_than_10
+
+fold_disagreement:
+  source: five_saved_native_fold_probability_outputs
+  patient_signals:
+    - fold_RVEF_range_points
+    - fold_RVEF_standard_deviation_points_ddof1
+    - mean_pairwise_absolute_fold_RVEF_difference_points
+  risk_coverage_signal: fold_RVEF_range_points
+  coverages: [0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 1.00]
+  sorting: ascending_disagreement_then_patient_id
+  risks:
+    - mean_absolute_RVEF_error
+    - RVEF_error_greater_than_5_rate
+    - ACDC_mean_robust_RVEF_error
+
+statistics:
+  independent_unit: patient
+  never_independent: [slice, phase, fold, probability_channel]
+  confidence_level: 0.95
+  continuous_interval: scipy_BCa_patient_bootstrap
+  bootstrap_resamples: 5000
+  bootstrap_seed: 20260812
+  proportion_interval: statsmodels_Wilson
+  paired_comparison: paired_patient_level_C2_minus_historical
+  vendor_results: descriptive_patient_level_within_vendor
+  minimum_vendor_n_for_BCa: 5
+  missing_or_nonfinite: explicit_count_and_complete_case_estimand_for_each_endpoint
+  multiplicity: descriptive_no_null_hypothesis_significance_claims
+
+factual_decision:
+  labels:
+    - HIGH_DICE_DOES_NOT_CERTIFY_MEASUREMENT_RELIABILITY
+    - MEASUREMENT_FAILURE_LARGELY_EXPLAINED_BY_WEAK_SEGMENTATION
+    - RELIABILITY_RESULT_INCONCLUSIVE
+  strong_result_requires_all:
+    - GO_C2_DEVELOPMENT_QUALIFIED
+    - ACDC_clinically_material_robust_error
+    - at_least_two_ACDC_robust_gt5_silent_failures_at_minimum_phase_Dice_ge_0.90
+    - original_refined_sensitivity_addressed_by_convention_envelope
+    - invalid_and_pathological_cases_reported
+    - fold_disagreement_monitor_is_weak_or_incomplete
+    - leave_one_worst_patient_out_does_not_remove_all_robust_gt5_silent_failures
+  clinically_material_robust_error_any:
+    - ACDC_robust_RVEF_MAE_greater_than_or_equal_to_4_points
+    - ACDC_robust_gt5_rate_greater_than_or_equal_to_0.10
+    - at_least_two_ACDC_robust_gt10_cases
+  monitor_weak_or_incomplete_any:
+    - AUROC_for_robust_gt5_below_0.70
+    - AUROC_BCa_interval_includes_0.50
+    - fewer_than_10_positive_and_10_negative_cases
+    - risk_at_80_percent_coverage_improves_less_than_20_percent_vs_full_coverage
+  weak_segmentation_explanation_requires_all:
+    - paired_C2_minus_historical_minimum_phase_Dice_BCa_lower_above_0
+    - C2_robust_RVEF_MAE_at_least_30_percent_below_historical
+    - no_more_than_one_C2_robust_gt5_silent_failure_at_minimum_phase_Dice_ge_0.90
+    - zero_C2_robust_gt10_silent_failures_at_minimum_phase_Dice_ge_0.90
+  otherwise: RELIABILITY_RESULT_INCONCLUSIVE
+
+outputs:
+  checkpoint_free_package: true
+  include_raw_checkpoints: false
+  include_probability_arrays_in_PI_zip: false
+  retain_probability_arrays_in_run_namespace: true
+  tables:
+    - reliability_per_case.csv
+    - reliability_per_patient.csv
+    - segmentation_battery.csv
+    - measurement_battery.csv
+    - reference_policy_analysis.csv
+    - historical_paired_comparison.csv
+    - fold_disagreement.csv
+    - risk_coverage.csv
+  figures:
+    - figure_overlap_vs_measurement_error.png
+    - figure_reference_policy_sensitivity.png
+    - figure_historical_comparison.png
+    - figure_mnms_vendor.png
+    - figure_fold_risk_coverage.png
+
+forbidden_actions:
+  - training
+  - resume
+  - calibration
+  - postprocessing_change
+  - threshold_change
+  - fold_selection
+  - endpoint_checkpoint_selection
+  - access_MnMs2
+  - production_training
+  - repeatability_training
+  - silent_ratio_clipping
+  - anatomy_correctness_claim

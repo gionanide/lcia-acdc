@@ -1,0 +1,135 @@
+schema_version: 1
+protocol_name: c2_development_qualification_oof_v1
+status: public_scientific_configuration
+scope: C2_only_development_OOF_qualification
+
+paths:
+  nnunet_raw: null
+  nnunet_preprocessed: null
+  out_dir: null
+
+data_access:
+  allowed_patient_ids: {first: 1, last: 100}
+  grouping_unit: patient
+  phases: [ED, ES]
+  held_out_test_allowed: false
+  external_cohort_allowed: false
+  clinical_endpoint_allowed: false
+
+training_contract_audit:
+  package: nnunetv2
+  version: 2.8.1
+  dataset_id: 701
+  configuration: 2d
+  folds: [0, 1, 2, 3, 4]
+  epochs_per_fold: 1000
+  batch_size: 56
+  nnUNet_n_proc_DA: 8
+  nnUNet_compile: false
+  checkpoint_rules: [checkpoint_final, checkpoint_best]
+  continuation_fold: 0
+  continuation_epochs: 200
+  continuation_selectable: false
+
+oof:
+  required_patients: 100
+  required_cases_per_rule: 200
+  native_grid_predictions: true
+  rules:
+    checkpoint_final:
+      filename: checkpoint_final.pth
+      same_rule_all_folds: true
+    checkpoint_best:
+      filename: checkpoint_best.pth
+      same_rule_all_folds: true
+  different_rule_per_fold_allowed: false
+  completed_group_reuse: true
+  partial_group_retry: false
+  automatic_retry: false
+  inference:
+    implementation: nnunetv2.inference.predict_from_raw_data.nnUNetPredictor
+    tile_step_size: 0.5
+    use_gaussian: true
+    use_mirroring: true
+    perform_everything_on_device: true
+    save_probabilities: false
+    preprocessing_processes: 2
+    export_processes: 2
+  native_grid_contract:
+    authoritative_io: nnunetv2.imageio.simpleitk_reader_writer.SimpleITKIO
+    required_equal_geometry: [size, spacing, origin, direction]
+    required_equal_nibabel_properties: [array_shape, header_spacing, axis_codes]
+    nibabel_best_affine_equality: descriptive_only
+    source_headers_may_be_modified: false
+
+metrics:
+  implementation:
+    dice: monai.metrics.compute_dice
+    hd95: monai.metrics.compute_hausdorff_distance
+    normalized_surface_dice: monai.metrics.compute_surface_dice
+  monai_version: 1.5.2
+  simpleitk_version: 2.5.5
+  surface_distance_units: mm
+  normalized_surface_dice_tolerance_mm: 2.0
+  use_subvoxel_surface_dice: true
+  bootstrap:
+    library: scipy.stats.bootstrap
+    method: BCa
+    confidence_level: 0.95
+    resamples: 5000
+    seed: 20260811
+
+selection:
+  scope: one_global_rule_across_all_folds
+  primary: mean_rv_dice
+  primary_equivalence_margin: 0.002
+  ordered_tiebreakers:
+    - minimum_phase_rv_dice_higher
+    - rv_dice_es_higher
+    - rv_hd95_mm_lower
+    - rv_normalized_surface_dice_higher
+  exact_tie_fallback: checkpoint_final
+  clinical_measurements_allowed: false
+
+continuation:
+  fold: 0
+  epochs: 200
+  source_checkpoint: checkpoint_final.pth
+  selectable: false
+  mean_rv_dice_max_gain: 0.002
+  minimum_phase_rv_dice_max_gain: 0.003
+
+safety:
+  selected_rule_lv_dice_max_deficit_from_better_global_rule: 0.005
+  selected_rule_myocardium_dice_max_deficit_from_better_global_rule: 0.005
+  invalid_output_rate_required: 0.0
+  all_training_audits_finite_required: true
+
+qualification:
+  all_required:
+    - all_five_folds_complete
+    - all_training_and_checkpoint_audits_finite
+    - fold0_continuation_gain_below_both_limits
+    - selected_rule_lv_safety
+    - selected_rule_myocardium_safety
+    - complete_oof_predictions_for_both_rules
+    - invalid_output_rate_zero
+    - one_global_checkpoint_rule_frozen
+    - forbidden_access_count_zero
+  go_decision: GO_C2_DEVELOPMENT_QUALIFIED
+  no_go_decision: NO_GO_C2_DEVELOPMENT_NOT_QUALIFIED
+
+forbidden:
+  - modify_any_training_source
+  - copy_checkpoint_binaries_into_OOF_or_PI_package
+  - endpoint_checkpoint_selection
+  - different_checkpoint_rule_per_fold
+  - EDV_ESV_RVEF_or_clinical_threshold_selection
+  - held_out_ACDC_test_access
+  - MnMs_access
+  - MnMs2_access
+  - external_cohort_access
+  - clinical_endpoint_access
+  - production_training
+  - repeatability_training
+  - automatic_retry

@@ -1,0 +1,16 @@
+# Python 3.11; versions read from the existing study environment metadata.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+monai==1.5.2
+nnunetv2==2.8.1
+dynamic-network-architectures==0.4.4
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.17.1
+statsmodels==0.14.6
+nibabel==5.4.2
+SimpleITK==2.5.5
+matplotlib==3.11.0
+scikit-learn==1.9.0
+omegaconf==2.3.1
+pytest==9.1.1

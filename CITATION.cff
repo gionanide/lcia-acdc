@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "LCIA-ACDC: label-change impact assessment for the ACDC right ventricular labels"
+version: 1.0.0
+license: MIT
+authors:
+  - family-names: Gionanidis
+    given-names: Emmanouil
+  - family-names: Miltiadous
+    given-names: Andreas
+  - family-names: Giannakeas
+    given-names: Nikolaos
+  - family-names: Tzallas
+    given-names: Alexandros T.
+preferred-citation:
+  type: article
+  title: "When Reference Labels Change: A Framework for Assessing Deep Learning Measurement of Right Ventricular Ejection Fraction"
+  authors:
+    - family-names: Gionanidis
+      given-names: Emmanouil
+    - family-names: Miltiadous
+      given-names: Andreas
+    - family-names: Giannakeas
+      given-names: Nikolaos
+    - family-names: Tzallas
+      given-names: Alexandros T.
+  journal: "Diagnostics"
+  year: 2026
